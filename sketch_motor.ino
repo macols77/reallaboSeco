@@ -1,24 +1,23 @@
-#define PI 3.141592
-
 #define ENCODER_PIN_A 3
 #define ENCODER_PIN_B 7
 
-
-#define MOTOR_PWM_FORWARD 8
-#define MOTOR_PWM_BACKWARD 9
-#define BRIDGE_ENABLE 10
+#define MOTOR_PWM_FORWARD 6
+#define MOTOR_PWM_BACKWARD 8
+#define BRIDGE_ENABLE 2
 #define COUNTS_PER_REVOLUTION 3591.84
 
-// 40Khz para no molestar a Alvaro
-#define PWM_FREQ 40000
-// 8 bits de resolucion del PWM. Suficiente para el motor tan malo que tenemos. La diferencia entre 1V casi es imperceptible, aumentar la resolucion no sirve de nada.
-#define PWM_MAX_DUTY 256
-#define VMAX 9
+// 30Khz para no molestar a Alvaro
+#define PWM_FREQ 20000
+// 8 bits de resolucion del PWM.
+#define PWM_MAX_DUTY 255
+#define VMAX 12
 
 
 #define MAX_ITERATIONS 50
 // Cogemos datos cada segundo
 #define SAMPLING_TIME_MS 1000
+
+#define SERIAL_BPS 112500
 
 int iterations = 0;
 volatile int encoderPosition = 0;
@@ -28,6 +27,7 @@ void initEncoder();
 void setPWMValue(int pin, double percentage);
 void interruptionPinA();
 void interruptionPinB();
+void interruptionTime();
 void writeDataInSerial();
 void setSpeed(double speed);
 
@@ -42,25 +42,15 @@ void setup() {
   
   // INTERRUPCIONES DEL ENCODER: en los flancos de A y  en los flancos de B
   attachInterrupt(ENCODER_PIN_A, interruptionPinA, CHANGE); 
-  attachInterrupt(ENCODER_PIN_B, interruptionPinB, CHANGE);  
-  
-  Serial.begin(112500);
+  attachInterrupt(ENCODER_PIN_B, interruptionPinB, CHANGE);
+
+  Serial.begin(SERIAL_BPS);
   Serial.println("Init finished");
 }
 
 void loop() {
-  if (iterations < 50) {
-    writeDataInSerial();
-    delay(SAMPLING_TIME_MS);
-    // Testing
-    static int speed = 0;
-    setSpeed(speed);
-    speed++;
-    if (speed > 9)
-      speed = -9;    
-  }
-  
-  iterations++;
+  interruptionTimer();
+  delay(SAMPLING_TIME_MS);
 }
 
 /**
@@ -94,12 +84,27 @@ void pwmConf(int pin, int freq) {
     int channel = g_APinDescription[pin].ulPWMChannel;
     
     pmc_enable_periph_clk(PWM_INTERFACE_ID);
+
+    // VARIANT_MCK is the micro clock frequency
     PWMC_ConfigureClocks(freq * PWM_MAX_DUTY, 0, VARIANT_MCK);
-    PWMC_ConfigureChannel(PWM_INTERFACE, channel, PWM_CMR_CPRE_CLKA, 0, 0);
-    PWMC_SetPeriod(PWM_INTERFACE, channel, PWM_MAX_DUTY); 
+    
+    PWMC_ConfigureChannel(
+      PWM_INTERFACE,
+      channel,
+      PWM_CMR_CPRE_CLKA, // prescaler
+      0, // alignment, 0 = left aligned
+      0 // polarity
+    );
+    
+    PWMC_SetPeriod(PWM_INTERFACE,
+      channel,
+      PWM_MAX_DUTY // period
+    );
+
+    // Active PWM
     PWMC_EnableChannel(PWM_INTERFACE, channel);
 }
-
+ 
 /**
  * Pone un valor en el PWM entre 0 y 255, 0 para parado, 255 para maximo. (Ya que la resolucion es de 8 bits)
  * percentage tiene que venir entre 0 1 y 1
@@ -107,25 +112,25 @@ void pwmConf(int pin, int freq) {
 void setPWMValue(int const pin, double const percentage) {
   int channel = g_APinDescription[pin].ulPWMChannel;
 
-  int value = percentage*PWM_MAX_DUTY;
+  double value = (double)((double)percentage/(double)VMAX)*PWM_MAX_DUTY;
+  
+  Serial.print("Value: ");
+  Serial.println(value);
   
   PWMC_SetDutyCycle(PWM_INTERFACE, channel, value);
 }
 
 /**
- * Speed puede venir desde -9V a 9V
+ * Speed puede venir desde -12V a 12V
  */
 void setSpeed(double speed) {
-  double pwmToWrite = 0;
   if (speed >= 0) {
-    pwmToWrite = (double)speed/(double)VMAX;
-    setPWMValue(MOTOR_PWM_FORWARD, pwmToWrite);
+    setPWMValue(MOTOR_PWM_FORWARD, speed);
     setPWMValue(MOTOR_PWM_BACKWARD, 0);
   } else {
     speed = -speed;
-    pwmToWrite = (double)speed/(double)VMAX;
     setPWMValue(MOTOR_PWM_FORWARD, 0);
-    setPWMValue(MOTOR_PWM_BACKWARD, pwmToWrite);
+    setPWMValue(MOTOR_PWM_BACKWARD, speed);
   }
 }
 
@@ -147,6 +152,16 @@ void interruptionPinB() {
     encoderPosition++;
   else
     encoderPosition--;
+}
+
+void interruptionTimer() {
+  writeDataInSerial();
+  static int speed = 0;
+  setSpeed(speed);
+  speed++;
+
+  if (speed == 12)
+    speed = -12;
 }
 
 void writeDataInSerial() {
