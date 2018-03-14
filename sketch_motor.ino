@@ -1,3 +1,5 @@
+#include <DueTimer.h>
+
 #define ENCODER_PIN_A 3
 #define ENCODER_PIN_B 7
 
@@ -6,7 +8,7 @@
 #define BRIDGE_ENABLE 2
 #define COUNTS_PER_REVOLUTION 3591.84
 
-// 30Khz para no molestar a Alvaro
+// 20Khz
 #define PWM_FREQ 20000
 // 8 bits de resolucion del PWM.
 #define PWM_MAX_DUTY 255
@@ -16,18 +18,29 @@
 #define MAX_ITERATIONS 50
 // Cogemos datos cada segundo
 #define SAMPLING_TIME_MS 1000
+#define SAMPLES 1200
+#define SPEED 12
 
 #define SERIAL_BPS 112500
 
-int iterations = 0;
+#define TIMES 10
+
+volatile int iterations = 0;
+int changeSpeedTime = 0;
+int p = 0;
 volatile int encoderPosition = 0;
+volatile double data[SAMPLES+1];
+volatile bool firstPositionA = false;
+volatile bool firstPositionB = false;
+
+
 
 void pwmConf();
 void initEncoder();
 void setPWMValue(int pin, double percentage);
 void interruptionPinA();
 void interruptionPinB();
-void interruptionTime();
+void sampling();
 void writeDataInSerial();
 void setSpeed(double speed);
 
@@ -37,20 +50,35 @@ void setup() {
   
   pwmConf(MOTOR_PWM_FORWARD, PWM_FREQ);
   pwmConf(MOTOR_PWM_BACKWARD, PWM_FREQ);
-  
+
   // setPWMValue(MOTOR_PWM_FORWARD, 0.5);
-  
+
+    // Check encoder
+  if (digitalRead(ENCODER_PIN_A))
+    firstPositionA = true;
+  if (digitalRead(ENCODER_PIN_B))
+    firstPositionB = true;
+    
   // INTERRUPCIONES DEL ENCODER: en los flancos de A y  en los flancos de B
   attachInterrupt(ENCODER_PIN_A, interruptionPinA, CHANGE); 
   attachInterrupt(ENCODER_PIN_B, interruptionPinB, CHANGE);
 
+  Timer1.attachInterrupt(sampling).start(SAMPLING_TIME_MS); // Calls every 1ms
+  
   Serial.begin(SERIAL_BPS);
   Serial.println("Init finished");
+  
+  setSpeed(SPEED);
 }
 
 void loop() {
-  interruptionTimer();
-  delay(SAMPLING_TIME_MS);
+  if (iterations == (SAMPLES+1) && p < TIMES) {
+   writeDataInSerial();
+   iterations = 0;
+   p++;
+   setSpeed(SPEED);
+   encoderPosition = 0;
+  }
 }
 
 /**
@@ -114,9 +142,6 @@ void setPWMValue(int const pin, double const percentage) {
 
   double value = (double)((double)percentage/(double)VMAX)*PWM_MAX_DUTY;
   
-  Serial.print("Value: ");
-  Serial.println(value);
-  
   PWMC_SetDutyCycle(PWM_INTERFACE, channel, value);
 }
 
@@ -138,39 +163,52 @@ void setSpeed(double speed) {
  * Interupcion asociada al pin A
  */
 void interruptionPinA() {
-  if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
-    encoderPosition--;
-  else
-    encoderPosition++;
+
+  if (!firstPositionA) {
+     if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
+      encoderPosition--;
+    else
+      encoderPosition++; 
+  }
+
+  firstPositionA = false;
 }
 
 /**
  * Interupcion asociada al pin B
  */
 void interruptionPinB() {
-  if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
-    encoderPosition++;
-  else
-    encoderPosition--;
+  if (!firstPositionB) {
+     if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
+      encoderPosition++;
+    else
+      encoderPosition--;
+  }
+
+  firstPositionB = false;
 }
 
-void interruptionTimer() {
-  writeDataInSerial();
-  static int speed = 0;
-  setSpeed(speed);
-  speed++;
+void sampling() {
 
-  if (speed == 12)
-    speed = -12;
+  if (iterations <= SAMPLES) {
+    data[iterations] = encoderPosition;
+    iterations++;
+  }
+
+  if (iterations == 600)
+    setSpeed(0);
 }
 
 void writeDataInSerial() {
-  // Sacar cosas por pantalla
- Serial.print("Iteration ");
- Serial.print(iterations);
- Serial.print(" Encoder pos ");
- Serial.print(encoderPosition);
- Serial.print(" en radianes ");
- Serial.println(2*PI*encoderPosition/COUNTS_PER_REVOLUTION);
+ for (int i = 0; i <= SAMPLES; i++) {
+   Serial.print(i);
+   /*Serial.print("] Iteration [");
+   Serial.print(iterations);
+   Serial.print("] Encoder pos [");
+   Serial.print(encoderPosition);
+   Serial.print("] en radianes [");*/
+   Serial.print(" ");
+   Serial.println(data[i]);
+ }
 }
 
