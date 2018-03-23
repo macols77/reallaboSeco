@@ -14,54 +14,54 @@
 #define PWM_MAX_DUTY 255
 #define VMAX 12
 
-
-#define MAX_ITERATIONS 50
 // Cogemos datos cada segundo
 #define SAMPLING_TIME_MS 1000
 #define SAMPLES 1200
+#define TIMES 10
+
 #define SPEED 12
 
 #define SERIAL_BPS 112500
 
-#define TIMES 10
-
-volatile int iterations = 0;
-int changeSpeedTime = 0;
-int p = 0;
-volatile int encoderPosition = 0;
-volatile double data[SAMPLES+1];
-volatile bool firstPositionA = false;
-volatile bool firstPositionB = false;
-
+int32_t iterations;
+int32_t p;
+int32_t encoderPosition;
+double data[SAMPLES+1];
+uint8_t lastState;
 
 
 void pwmConf();
+void initBridge();
 void initEncoder();
 void setPWMValue(int pin, double percentage);
-void interruptionPinA();
-void interruptionPinB();
+void setSpeed(double speed);
+
 void sampling();
 void writeDataInSerial();
-void setSpeed(double speed);
+
+void interruptionPin();
+int32_t getCurrentPinState();
 
 void setup() {
   initEncoder();
   initBridge();
+
+  iterations = 0;
+  p = 0;
+  encoderPosition = 0;
+  lastState = 0;
+  memset(data, 0, sizeof(data));
+  
   
   pwmConf(MOTOR_PWM_FORWARD, PWM_FREQ);
   pwmConf(MOTOR_PWM_BACKWARD, PWM_FREQ);
 
-  // setPWMValue(MOTOR_PWM_FORWARD, 0.5);
-
-    // Check encoder
-  if (digitalRead(ENCODER_PIN_A))
-    firstPositionA = true;
-  if (digitalRead(ENCODER_PIN_B))
-    firstPositionB = true;
+  // Check encoder
+  lastState = getCurrentPinState();  
     
-  // INTERRUPCIONES DEL ENCODER: en los flancos de A y  en los flancos de B
-  attachInterrupt(ENCODER_PIN_A, interruptionPinA, CHANGE); 
-  attachInterrupt(ENCODER_PIN_B, interruptionPinB, CHANGE);
+  // Interrupciones del encoder.
+  attachInterrupt(ENCODER_PIN_A, interruptionPin, CHANGE); 
+  attachInterrupt(ENCODER_PIN_B, interruptionPin, CHANGE);
 
   Timer1.attachInterrupt(sampling).start(SAMPLING_TIME_MS); // Calls every 1ms
   
@@ -114,8 +114,8 @@ void pwmConf(int pin, int freq) {
     pmc_enable_periph_clk(PWM_INTERFACE_ID);
 
     // VARIANT_MCK is the micro clock frequency
-    PWMC_ConfigureClocks(freq * PWM_MAX_DUTY, 0, VARIANT_MCK);
-    
+    PWMC_ConfigureClocks(freq * PWM_MAX_DUTY, freq * PWM_MAX_DUTY, VARIANT_MCK);
+   
     PWMC_ConfigureChannel(
       PWM_INTERFACE,
       channel,
@@ -160,32 +160,46 @@ void setSpeed(double speed) {
 }
 
 /**
- * Interupcion asociada al pin A
+ * Retorna el estado actual de los pines del encoder
  */
-void interruptionPinA() {
+int32_t getCurrentPinState() {
+  bool pinA = digitalRead(ENCODER_PIN_A);
+  bool pinB = digitalRead(ENCODER_PIN_B);
 
-  if (!firstPositionA) {
-     if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
-      encoderPosition--;
-    else
-      encoderPosition++; 
-  }
-
-  firstPositionA = false;
+  if (!pinA && !pinB) return 0;
+  if (!pinA && pinB) return 1;
+  if (pinA && !pinB) return 2;
+  if (pinA && pinB) return 3;
 }
 
 /**
- * Interupcion asociada al pin B
+ * Maneja las interrupciones de los pines actualizando el posicion del encoder
  */
-void interruptionPinB() {
-  if (!firstPositionB) {
-     if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
-      encoderPosition++;
-    else
-      encoderPosition--;
+void interruptionPin() {
+  int32_t state = getCurrentPinState();
+
+  switch(lastState) {
+    case 0:
+      if (state == 1) encoderPosition--;
+      else if (state == 2) encoderPosition++;
+      break;
+    case 1:
+      if (state == 3) encoderPosition--;
+      else if (state == 0) encoderPosition++;
+      break;
+    case 2:
+      if (state == 0) encoderPosition--;
+      else if (state == 3) encoderPosition++;
+      break;
+    case 3:
+      if (state == 2) encoderPosition--;
+      else if (state == 1) encoderPosition++;
+      break;
+    default:
+      break;
   }
 
-  firstPositionB = false;
+  lastState = state;
 }
 
 void sampling() {
@@ -202,11 +216,6 @@ void sampling() {
 void writeDataInSerial() {
  for (int i = 0; i <= SAMPLES; i++) {
    Serial.print(i);
-   /*Serial.print("] Iteration [");
-   Serial.print(iterations);
-   Serial.print("] Encoder pos [");
-   Serial.print(encoderPosition);
-   Serial.print("] en radianes [");*/
    Serial.print(" ");
    Serial.println(data[i]);
  }

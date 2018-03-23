@@ -17,25 +17,44 @@
 
 // Cogemos datos cada segundo
 #define SAMPLING_TIME_MS 1000
+#define SAMPLES 1200
+#define TIMES 10
 
 #define SERIAL_BPS 115200
 
-#define VALUE_TO_MOVE 500
-#define KP 5
-/*Valores de Kp --> (0.1) ->1818.904252; (0.3) -> 606.3014174; (0.707) -> 257.270757; (1) -> 181.8904252*/
+#define VALUE_TO_MOVE_TO 1796
 
-volatile int encoderPosition = 0;
-volatile bool firstPositionA = false;
-volatile bool firstPositionB = false;
-//volatile int lastState = 0;
+/**
+ * Valores de KP (antiguos):
+ * 1 -> 0.2154
+ * 0.707 -> 0.304
+ * 0.3 -> 0.7181
+ * 0.1 -> 2.1544
+ * 
+ * Valores de KP (nuevos):
+ * 1 -> 0.18846
+ * 0.707 -> 0.26656
+ * 0.3 -> 0.628201
+ * 0.1 -> 1.8846
+ */
+#define KP 1.8846
+
+int32_t encoderPosition;
+int32_t data[SAMPLES+1];
+int32_t iterations;
+int32_t p;
+
+//volatile bool firstPositionA = false;
+//volatile bool firstPositionB = false;
+int32_t lastState;
 
 void pwmConf();
 void initEncoder();
 void setPWMValue(int pin, double percentage);
-void interruptionPinA();
-void interruptionPinB();
-//void interruptionPin();
-//int getCurrentPinState();
+//void interruptionPinA();
+//void interruptionPinB();
+void interruptionPin();
+int32_t getCurrentPinState();
 void controller();
 void setSpeed(double speed);
 void writeData();
@@ -46,26 +65,20 @@ void setup() {
   
   pwmConf(MOTOR_PWM_FORWARD, PWM_FREQ);
   pwmConf(MOTOR_PWM_BACKWARD, PWM_FREQ);
+
+  encoderPosition = 0;
+  iterations = 0;
+  p = 0;
   
    // Check encoder
-  if (digitalRead(ENCODER_PIN_A))
-    firstPositionA = true;
-  if (digitalRead(ENCODER_PIN_B))
-    firstPositionB = true;
-
-  //lastState = getCurrentPinState();
-    
-  // Interrupciones del encoder
-  attachInterrupt(ENCODER_PIN_A, interruptionPinA, CHANGE); 
-  attachInterrupt(ENCODER_PIN_B, interruptionPinB, CHANGE);
-
-  // Interrupciones del encoder. Versión de estados
-  // Descomentar funciones interruptionPin, getCurrentPinState y la linea de arriba de lastState.
-  //attachInterrupt(ENCODER_PIN_A, interruptionPin, CHANGE); 
-  //attachInterrupt(ENCODER_PIN_B, interruptionPin, CHANGE);
+  lastState = getCurrentPinState();
+  
+  // Interrupciones del encoder.
+  attachInterrupt(ENCODER_PIN_A, interruptionPin, CHANGE); 
+  attachInterrupt(ENCODER_PIN_B, interruptionPin, CHANGE);
   
   Timer1.attachInterrupt(controller).start(SAMPLING_TIME_MS); // Calls every 1ms
-  Timer2.attachInterrupt(writeData).start(1000*SAMPLING_TIME_MS);
+  Timer2.attachInterrupt(sampling).start(SAMPLING_TIME_MS);
   
   Serial.begin(SERIAL_BPS);
   Serial.println("Init finished");
@@ -73,6 +86,13 @@ void setup() {
 
 void loop() {
   // Nothing
+  if (iterations == (SAMPLES+1) && p < TIMES) {
+     writeDataInSerial();
+     iterations = 0;
+     p++;
+     encoderPosition = 0;
+     lastState = getCurrentPinState();
+  }
 }
 
 /**
@@ -108,7 +128,7 @@ void pwmConf(int pin, int freq) {
     pmc_enable_periph_clk(PWM_INTERFACE_ID);
 
     // VARIANT_MCK is the micro clock frequency
-    PWMC_ConfigureClocks(freq * PWM_MAX_DUTY, 0, VARIANT_MCK);
+    PWMC_ConfigureClocks(freq * PWM_MAX_DUTY, freq * PWM_MAX_DUTY, VARIANT_MCK);
     
     PWMC_ConfigureChannel(
       PWM_INTERFACE,
@@ -127,13 +147,11 @@ void pwmConf(int pin, int freq) {
     PWMC_EnableChannel(PWM_INTERFACE, channel);
 }
 
-void writeData() {
-     Serial.print("Error: ");
-    Serial.print(VALUE_TO_MOVE - encoderPosition);
-    Serial.print(" Position: ");
-    Serial.print(encoderPosition);
-    Serial.print(" valueToMoveTo ");
-    Serial.println(VALUE_TO_MOVE);
+void sampling() {
+  if (iterations <= SAMPLES) {
+    data[iterations] = encoderPosition;
+    iterations++;
+  }
 }
 
 void controller() {
@@ -141,7 +159,7 @@ void controller() {
     double positionRadian = encoderPosition;
     
     // Error signal. 
-    double error = VALUE_TO_MOVE - positionRadian;
+    double error = VALUE_TO_MOVE_TO - positionRadian;
     
     // Señal de Control
     double u = error * KP;
@@ -164,7 +182,7 @@ void controller() {
 void setPWMValue(int const pin, double const percentage) {
   int channel = g_APinDescription[pin].ulPWMChannel;
 
-  double value = (double)((double)percentage/(double)VMAX)*PWM_MAX_DUTY;
+  double value = (uint16_t)((double)percentage/(double)VMAX)*PWM_MAX_DUTY;
   
   PWMC_SetDutyCycle(PWM_INTERFACE, channel, value);
 }
@@ -186,7 +204,7 @@ void setSpeed(double speed) {
 /**
  * Interupcion asociada al pin A
  */
-void interruptionPinA() {
+/*void interruptionPinA() {
   if (!firstPositionA) {
      if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
       encoderPosition++;
@@ -195,12 +213,12 @@ void interruptionPinA() {
   }
   
   firstPositionA = false;
-}
+}*/
 
 /**
  * Interupcion asociada al pin B
  */
-void interruptionPinB() {
+/*void interruptionPinB() {
   if (!firstPositionB) {
      if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
       encoderPosition--;
@@ -209,9 +227,9 @@ void interruptionPinB() {
   }
   
   firstPositionB = false;
-}
+}*/
 
-/*int getCurrentPinState() {
+int32_t getCurrentPinState() {
   bool pinA = digitalRead(ENCODER_PIN_A);
   bool pinB = digitalRead(ENCODER_PIN_B);
 
@@ -222,29 +240,37 @@ void interruptionPinB() {
 }
 
 void interruptionPin() {
-  int state = getCurrentPinState();
+  int32_t state = getCurrentPinState();
 
   switch(lastState) {
     case 0:
-      if (state == 1) encoderPosition++;
-      else if (state == 2) encoderPosition--;
+      if (state == 1) encoderPosition--;
+      else if (state == 2) encoderPosition++;
       break;
     case 1:
-      if (state == 3) encoderPosition++;
-      else if (state == 0) encoderPosition--;
+      if (state == 3) encoderPosition--;
+      else if (state == 0) encoderPosition++;
       break;
     case 2:
-      if (state == 0) encoderPosition++;
-      else if (state == 3) encoderPosition--;
+      if (state == 0) encoderPosition--;
+      else if (state == 3) encoderPosition++;
       break;
     case 3:
-      if (state == 2) encoderPosition++;
-      else if (state == 1) encoderPosition--;
+      if (state == 2) encoderPosition--;
+      else if (state == 1) encoderPosition++;
       break;
     default:
       break;
   }
 
   lastState = state;
-}*/
+}
+
+void writeDataInSerial() {
+ for (int32_t i = 0; i <= SAMPLES; i++) {
+   Serial.print(i);
+   Serial.print(" ");
+   Serial.println(data[i]);
+ }
+}
 
