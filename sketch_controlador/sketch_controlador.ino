@@ -22,37 +22,32 @@
 
 #define SERIAL_BPS 115200
 
-#define VALUE_TO_MOVE_TO 1796
+#define VALUE_TO_MOVE_TO 3.141592
 
 /**
- * Valores de KP (antiguos):
- * 1 -> 0.2154
- * 0.707 -> 0.304
- * 0.3 -> 0.7181
- * 0.1 -> 2.1544
- * 
- * Valores de KP (nuevos):
+ * Valores de KP (pulsos/s):
  * 1 -> 0.18846
  * 0.707 -> 0.26656
  * 0.3 -> 0.628201
  * 0.1 -> 1.8846
+ * Valores de KP (rad/s):
+ * 1 -> 107.7312
+ * 0.707 -> 215.5275
+ * 0.3 -> 1197.0135
+ * 0.1 -> 10773.1223
  */
-#define KP 1.8846
+#define KP 107.7312
 
 int32_t encoderPosition;
 int32_t data[SAMPLES+1];
 int32_t iterations;
 int32_t p;
 
-//volatile bool firstPositionA = false;
-//volatile bool firstPositionB = false;
 int32_t lastState;
 
 void pwmConf();
 void initEncoder();
 void setPWMValue(int pin, double percentage);
-//void interruptionPinA();
-//void interruptionPinB();
 void interruptionPin();
 int32_t getCurrentPinState();
 void controller();
@@ -147,6 +142,9 @@ void pwmConf(int pin, int freq) {
     PWMC_EnableChannel(PWM_INTERFACE, channel);
 }
 
+/**
+ * Metodo para obtener muestras de la posicion actual
+ */
 void sampling() {
   if (iterations <= SAMPLES) {
     data[iterations] = encoderPosition;
@@ -154,9 +152,12 @@ void sampling() {
   }
 }
 
+/**
+ * Metodo controlador que se encarga de imprimir una velocidad determinada al motor para llegar a la posicion requerida en VALUE_TO_MOVE_TO
+ */
 void controller() {
     // Get position
-    double positionRadian = encoderPosition;
+    double positionRadian = 2*PI*encoderPosition/COUNTS_PER_REVOLUTION;
     
     // Error signal. 
     double error = VALUE_TO_MOVE_TO - positionRadian;
@@ -202,33 +203,8 @@ void setSpeed(double speed) {
 }
 
 /**
- * Interupcion asociada al pin A
+ * Obtiene el estado actual de los pines
  */
-/*void interruptionPinA() {
-  if (!firstPositionA) {
-     if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
-      encoderPosition++;
-     else
-      encoderPosition--;
-  }
-  
-  firstPositionA = false;
-}*/
-
-/**
- * Interupcion asociada al pin B
- */
-/*void interruptionPinB() {
-  if (!firstPositionB) {
-     if (digitalRead(ENCODER_PIN_A) == digitalRead(ENCODER_PIN_B))
-      encoderPosition--;
-     else
-      encoderPosition++;
-  }
-  
-  firstPositionB = false;
-}*/
-
 int32_t getCurrentPinState() {
   bool pinA = digitalRead(ENCODER_PIN_A);
   bool pinB = digitalRead(ENCODER_PIN_B);
@@ -239,6 +215,10 @@ int32_t getCurrentPinState() {
   if (pinA && pinB) return 3;
 }
 
+/**
+ * Rutina de atención a la interrupcion de los pines A y B.
+ * Comprueba el estado actual y el pasado y en función de estos actualiza la posición del encoder.
+ */
 void interruptionPin() {
   int32_t state = getCurrentPinState();
 
@@ -266,6 +246,9 @@ void interruptionPin() {
   lastState = state;
 }
 
+/**
+ * Saca los datos recogidos por puerto serie
+ */
 void writeDataInSerial() {
  for (int32_t i = 0; i <= SAMPLES; i++) {
    Serial.print(i);
